@@ -1,15 +1,14 @@
 #include "MDBSerial.h"
 
 
-MDBSerial::MDBSerial(uint8_t uart) 
+MDBSerial::MDBSerial(uint8_t uart) : m_uart(uart)
 {
-	m_uart = new UART(uart);
 }
 
 bool MDBSerial::begin()
 {
 	//hardReset(); //does not work at the moment
-	return m_uart->begin(9600, true);
+	return m_uart.begin(9600, true);
 }
 
 void MDBSerial::hardReset()
@@ -26,17 +25,17 @@ void MDBSerial::hardReset()
 
 void MDBSerial::Ack()
 {
-	m_uart->write9bit(0x00); //need 0 since ACK is 0x100 and doesnt work
+	m_uart.write9bit(0x00); // MDB ACK data byte (mode bit clear)
 }
 
 void MDBSerial::Nak()
 {
-	m_uart->write9bit(NAK);
+	m_uart.write9bit(NAK);
 }
 
 void MDBSerial::Ret()
 {
-	m_uart->write9bit(RET);
+	m_uart.write9bit(RET);
 }
 
 void MDBSerial::SendCommand(int address, int cmd, int *data, int dataCount)
@@ -47,41 +46,44 @@ void MDBSerial::SendCommand(int address, int cmd, int *data, int dataCount)
 void MDBSerial::SendCommand(int address, int cmd,  int subCmd, int *data, int dataCount)
 {
 	char sum = 0;
-	m_uart->flush();
-	m_uart->write9bit(0x100 | address | cmd);
+	m_uart.flush();
+	m_uart.write9bit(0x100 | address | cmd);
 	sum += address | cmd;
 	
 	if (subCmd >= 0)
 	{
-		m_uart->write9bit(subCmd);
+		m_uart.write9bit(subCmd);
 		sum += subCmd;
 	}
 
 	for (int i = 0; i < dataCount; i++)
 	{
-		m_uart->write9bit(data[i]);
+		m_uart.write9bit(data[i]);
 		sum += data[i];
 	}
-	m_uart->write9bit(sum); //send the checksum
+	m_uart.write9bit(sum); //send the checksum
 	delay(RESPONSE_TIME * 2);
 }
 
 int MDBSerial::GetResponse(char data[], int *count, int num_bytes)
 {	
 	char sum = 0;
+	int local_count = 0;
+	if (count == 0)
+		count = &local_count;
 	*count = 0;
 	
 	//wait for the response to arrive
 	delay(RESPONSE_TIME);
 	for (int i = 0; i < num_bytes; i++)
 	{
-		if (m_uart->ninthBitSet())
+		if (m_uart.ninthBitSet())
 		{
 			break;
 		}
-		else if (m_uart->error())
+		else if (m_uart.error())
 		{
-			m_uart->flush();
+			m_uart.flush();
 			return -1;
 		}
 		else
@@ -91,19 +93,19 @@ int MDBSerial::GetResponse(char data[], int *count, int num_bytes)
 	}
 	
 	//nothing received
-	if (!m_uart->available())
+	if (!m_uart.available())
 		return -2;
 	
 	int c = 0;
-	while (m_uart->available())
+	while (m_uart.available())
 	{
-		int resp = m_uart->read();
+		int resp = m_uart.read();
 		char val = resp;
 		if (resp & 0x100)
 		{
 			if (c == 0) //we got an ACK //or NAK or RET??
 			{
-				m_uart->flush();
+				m_uart.flush();
 				if (resp == ACK)
 					return ACK;
 				else if (resp == NAK)
@@ -115,18 +117,20 @@ int MDBSerial::GetResponse(char data[], int *count, int num_bytes)
 			{
 				if (sum != val)
 				{
-					m_uart->flush();
+					m_uart.flush();
 					return -3;
 				}
 			}
 		}
 		else
 		{
-			data[c++] = val;
+			if (data != 0 && c < DATA_MAX)
+				data[c] = val;
+			c++;
 			sum += val;
 		}
 	}
-	*count = c;
-	m_uart->flush();
+	*count = min(c, DATA_MAX);
+	m_uart.flush();
 	return 1;
 }
