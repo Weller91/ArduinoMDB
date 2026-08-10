@@ -15,7 +15,7 @@ volatile uint8_t *v_UCSRnA[4];
 volatile uint8_t *v_UCSRnB[4];
 
 
-UART::UART(uint8_t uart)
+UART::UART(uint8_t uart) : m_started(false)
 {
 	m_uart = uart % 4;
 }
@@ -36,7 +36,7 @@ bool UART::begin(uint32_t baud, bool nine_bit)
 	if (uarts_in_use[m_uart])
 		return false;
 	uarts_in_use[m_uart] = true;
-	
+
 	v_start[m_uart] = 0;
 	v_end[m_uart] = 0;
 	v_error[m_uart] = false;
@@ -52,7 +52,7 @@ bool UART::begin(uint32_t baud, bool nine_bit)
 		USBSn = USBS0;
 		U2Xn = U2X0;
 		RXCIEn = RXCIE0;
-		
+
 		v_UDRn[m_uart] = &UDR0;
 		v_UBRRnH = &UBRR0H;
 		v_UBRRnL = &UBRR0L;
@@ -71,7 +71,7 @@ bool UART::begin(uint32_t baud, bool nine_bit)
 		USBSn = USBS2;
 		U2Xn = U2X2;
 		RXCIEn = RXCIE2;
-		
+
 		v_UDRn[m_uart] = &UDR2;
 		v_UBRRnH = &UBRR2H;
 		v_UBRRnL = &UBRR2L;
@@ -90,7 +90,7 @@ bool UART::begin(uint32_t baud, bool nine_bit)
 		USBSn = USBS3;
 		U2Xn = U2X3;
 		RXCIEn = RXCIE3;
-		
+
 		v_UDRn[m_uart] = &UDR3;
 		v_UBRRnH = &UBRR3H;
 		v_UBRRnL = &UBRR3L;
@@ -109,7 +109,7 @@ bool UART::begin(uint32_t baud, bool nine_bit)
 		USBSn = USBS1;
 		U2Xn = U2X1;
 		RXCIEn = RXCIE1;
-		
+
 		v_UDRn[m_uart] = &UDR1;
 		v_UBRRnH = &UBRR1H;
 		v_UBRRnL = &UBRR1L;
@@ -117,26 +117,30 @@ bool UART::begin(uint32_t baud, bool nine_bit)
 		v_UCSRnB[m_uart] = &UCSR1B;
 		v_UCSRnC = &UCSR1C;
 	}
-	//set also UDRIE0 ?? 
+	//set also UDRIE0 ??
 	*v_UCSRnB[m_uart] |= (1 << RXENn) | (1 << TXENn) | (1 << RXCIEn);
 	*v_UCSRnC |= (1 << UCSZn1) | (1 << UCSZn0); //8 bit mode
 	if (nine_bit)
-		*v_UCSRnB[m_uart] |= (1 << UCSZn2); 
+		*v_UCSRnB[m_uart] |= (1 << UCSZn2);
 	*v_UCSRnC |= (0 << USBSn); //one stop bit else 1
 	*v_UCSRnC |= 0b00000000; //no parity bit
-	
+
 	uint16_t baud_setting = (F_CPU / 8 / baud - 1) / 2;
 	*v_UBRRnH = baud_setting >> 8;
 	*v_UBRRnL = baud_setting;
 	*v_UCSRnA[m_uart] &= ~(1 << U2Xn); //disable rate doubler
+	m_started = true;
 	return true;
 }
 
 void UART::end()
 {
+	if (!m_started)
+		return;
 	flush();
-	*v_UCSRnB[m_uart] |= (0 << RXENn) | (0 << TXENn) | (0 << RXCIEn);
+	*v_UCSRnB[m_uart] &= ~((1 << RXENn) | (1 << TXENn) | (1 << RXCIEn));
 	uarts_in_use[m_uart] = false;
+	m_started = false;
 }
 
 int UART::available()
@@ -149,7 +153,7 @@ int UART::peek()
 	if (v_start[m_uart] == v_end[m_uart]) {
 		return -1;
 	} else {
-		v_buffer[m_uart][v_start[m_uart]];
+		return v_buffer[m_uart][v_start[m_uart]];
 	}
 }
 
@@ -176,7 +180,7 @@ void UART::print(String s)
 void UART::print(const __FlashStringHelper* fsh)
 {
 	PGM_P p = reinterpret_cast<PGM_P>(fsh);
-	while (1) 
+	while (1)
 	{
 		unsigned char c = pgm_read_byte(p++);
 		if (c == 0) break;
@@ -194,7 +198,9 @@ void UART::print(const int i)
 
 void UART::print(const long l)
 {
-	*this << (int)l;
+	char str[30];
+	sprintf(str, "%ld", l);
+	*this << str;
 }
 
 void UART::print(const unsigned long lu)
@@ -221,9 +227,9 @@ void UART::print(const double d)
 
 size_t UART::write(uint8_t data)
 {
-	v_ninthBitSet[m_uart] = false;
 	while (!(*v_UCSRnA[m_uart] & (1 << UDRE))) {}
 	*v_UDRn[m_uart] = data;
+	return 1;
 }
 
 size_t UART::write9bit(uint16_t data)
@@ -233,7 +239,7 @@ size_t UART::write9bit(uint16_t data)
 		*v_UCSRnB[m_uart] |= (1 << TXB8);
 	else
 		*v_UCSRnB[m_uart] &= ~(1 << TXB8);
-	write((uint8_t)data);
+	return write((uint8_t)data);
 }
 
 int UART::read()
@@ -250,7 +256,7 @@ int UART::read()
 bool UART::readUL(unsigned long *val)
 {
 	if (available() >= 4)
-	{	
+	{
 		union u_tag {
 			byte b[4];
 			unsigned long ulval;
