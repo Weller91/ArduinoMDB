@@ -1,46 +1,57 @@
 #include "VendMechanism.h"
 
-VendMechanism::VendMechanism(uint8_t motorPin, uint8_t beamPin,
-                             bool motorActiveHigh,
+VendMechanism::VendMechanism(MotorArray &motors, uint8_t beamPin,
                              bool beamBreakActiveLow,
-                             unsigned long timeoutMs,
-                             unsigned long beamFilterMs)
-    : m_motorPin(motorPin),
+                             unsigned long beamFilterMs,
+                             unsigned long dropGraceMs)
+    : m_motors(motors),
       m_beamPin(beamPin),
-      m_motorActiveHigh(motorActiveHigh),
       m_beamBreakActiveLow(beamBreakActiveLow),
-      m_timeoutMs(timeoutMs),
       m_beamFilterMs(beamFilterMs),
-      m_startedAt(0),
+      m_dropGraceMs(dropGraceMs),
       m_beamChangedAt(0),
+      m_homeConfirmedAt(0),
       m_lastBeamBroken(false),
+      m_dropSeen(false),
+      m_homeConfirmed(false),
       m_result(IDLE)
 {
 }
 
 void VendMechanism::Begin()
 {
-    pinMode(m_motorPin, OUTPUT);
     pinMode(m_beamPin, INPUT_PULLUP);
-    setMotor(false);
+    m_motors.Begin();
     m_lastBeamBroken = IsBeamBroken();
     m_result = IDLE;
 }
 
-VendMechanism::Result VendMechanism::Start()
+VendMechanism::Result VendMechanism::Start(uint8_t motorIndex)
 {
     if (IsBeamBroken())
     {
-        setMotor(false);
         m_result = SENSOR_BLOCKED;
         return m_result;
     }
 
-    m_startedAt = millis();
-    m_beamChangedAt = m_startedAt;
+    MotorArray::Result motorResult = m_motors.Start(motorIndex);
+    if (motorResult == MotorArray::MOTOR_NOT_HOME)
+    {
+        m_result = MOTOR_NOT_HOME;
+        return m_result;
+    }
+    if (motorResult != MotorArray::RUNNING)
+    {
+        m_result = MOTOR_FAULT;
+        return m_result;
+    }
+
+    m_beamChangedAt = millis();
+    m_homeConfirmedAt = 0;
     m_lastBeamBroken = false;
+    m_dropSeen = false;
+    m_homeConfirmed = false;
     m_result = RUNNING;
-    setMotor(true);
     return m_result;
 }
 
@@ -50,24 +61,42 @@ VendMechanism::Result VendMechanism::Update()
         return m_result;
 
     unsigned long now = millis();
-    bool broken = IsBeamBroken();
+    bool beamBroken = IsBeamBroken();
 
-    if (broken != m_lastBeamBroken)
+    if (beamBroken != m_lastBeamBroken)
     {
-        m_lastBeamBroken = broken;
+        m_lastBeamBroken = beamBroken;
         m_beamChangedAt = now;
     }
 
-    if (broken && (now - m_beamChangedAt) >= m_beamFilterMs)
+    if (beamBroken && (now - m_beamChangedAt) >= m_beamFilterMs)
+        m_dropSeen = true;
+
+    MotorArray::Result motorResult = m_motors.Update();
+    if (motorResult == MotorArray::HOME_CONFIRMED && !m_homeConfirmed)
     {
-        setMotor(false);
+        m_homeConfirmed = true;
+        m_homeConfirmedAt = now;
+    }
+    else if (motorResult == MotorArray::TIMED_OUT ||
+             motorResult == MotorArray::MOTOR_NOT_HOME ||
+             motorResult == MotorArray::INVALID_MOTOR)
+    {
+        Stop();
+        m_result = MOTOR_FAULT;
+        return m_result;
+    }
+
+    if (m_homeConfirmed && m_dropSeen)
+    {
+        Stop();
         m_result = DROP_CONFIRMED;
         return m_result;
     }
 
-    if ((now - m_startedAt) >= m_timeoutMs)
+    if (m_homeConfirmed && (now - m_homeConfirmedAt) >= m_dropGraceMs)
     {
-        setMotor(false);
+        Stop();
         m_result = TIMED_OUT;
     }
 
@@ -76,18 +105,13 @@ VendMechanism::Result VendMechanism::Update()
 
 void VendMechanism::Stop()
 {
-    setMotor(false);
-    m_result = IDLE;
+    m_motors.Stop();
+    if (m_result == RUNNING)
+        m_result = IDLE;
 }
 
 bool VendMechanism::IsBeamBroken() const
 {
     bool inputHigh = digitalRead(m_beamPin) == HIGH;
     return m_beamBreakActiveLow ? !inputHigh : inputHigh;
-}
-
-void VendMechanism::setMotor(bool running)
-{
-    bool outputHigh = running ? m_motorActiveHigh : !m_motorActiveHigh;
-    digitalWrite(m_motorPin, outputHigh ? HIGH : LOW);
 }
