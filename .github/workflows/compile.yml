@@ -12,7 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: arduino/compile-sketches@v1
+
+      - name: Compile headless configuration
+        uses: arduino/compile-sketches@v1
         with:
           fqbn: arduino:avr:mega
           platforms: |
@@ -21,4 +23,19 @@ jobs:
           libraries: '[]'
           sketch-paths: |
             - .
+          enable-warnings-report: true
+
+      - name: Compile local keypad and LCD configuration
+        uses: arduino/compile-sketches@v1
+        with:
+          fqbn: arduino:avr:mega
+          platforms: |
+            - name: arduino:avr
+              version: 1.8.8
+          libraries: '[]'
+          sketch-paths: |
+            - .
+          cli-compile-flags: |
+            - --build-property
+            - compiler.cpp.extra_flags=-DENABLE_LOCAL_UI=1
           enable-warnings-report: true
