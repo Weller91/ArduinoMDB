@@ -25,7 +25,7 @@ jobs:
             - .
           enable-warnings-report: true
 
-      - name: Compile local keypad and LCD configuration
+      - name: Compile keypad and LCD configuration
         uses: arduino/compile-sketches@v1
         with:
           fqbn: arduino:avr:mega
@@ -37,5 +37,23 @@ jobs:
             - .
           cli-compile-flags: |
             - --build-property
-            - compiler.cpp.extra_flags=-DENABLE_LOCAL_UI=1
+            - compiler.cpp.extra_flags=-DUI_KEYPAD_LCD
+          enable-warnings-report: true
+
+      - name: Compile SPI touchscreen configuration
+        uses: arduino/compile-sketches@v1
+        with:
+          fqbn: arduino:avr:mega
+          platforms: |
+            - name: arduino:avr
+              version: 1.8.8
+          libraries: |
+            - name: Adafruit GFX Library
+            - name: Adafruit ILI9341
+            - name: XPT2046_Touchscreen
+          sketch-paths: |
+            - .
+          cli-compile-flags: |
+            - --build-property
+            - compiler.cpp.extra_flags=-DUI_SPI_TOUCHSCREEN
           enable-warnings-report: true
