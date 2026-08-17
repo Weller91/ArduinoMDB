@@ -1,5 +1,7 @@
 // Set to 1 to enable the optional 20x4 I2C LCD and 4x4 keypad.
+#ifndef ENABLE_LOCAL_UI
 #define ENABLE_LOCAL_UI 0
+#endif
 
 #include "BillValidator.h"
 #include "CashlessReader.h"
@@ -139,14 +141,29 @@ void updateLocalUI(CashlessReader::State cashlessState)
     uint16_t mdbPrice;
     if (!centsToMdbUnits(selectedProduct->priceCents, mdbPrice))
     {
-      localUI.ShowFault("PRICE SCALE ERROR");
       resetLocalSelection();
+      localUI.ShowFault("PRICE SCALE ERROR");
     }
     else if (onyx.RequestVend(mdbPrice, selectedProduct->code))
     {
       localVendFlow = WAITING_FOR_APPROVAL;
       localUI.ShowAuthorising();
     }
+  }
+
+  if (cashlessState == CashlessReader::CANCEL_REQUESTED)
+  {
+    onyx.SessionComplete();
+    resetLocalSelection();
+    localUI.ShowMessage("PAYMENT CANCELLED", "SELECT AGAIN", "", "");
+    return;
+  }
+
+  if (cashlessState == CashlessReader::FAULT)
+  {
+    resetLocalSelection();
+    localUI.ShowFault("NAYAX MDB FAULT");
+    return;
   }
 
   if (localVendFlow == WAITING_FOR_APPROVAL)
@@ -161,9 +178,9 @@ void updateLocalUI(CashlessReader::State cashlessState)
     }
     else if (cashlessState == CashlessReader::VEND_DENIED)
     {
-      localUI.ShowDenied();
       onyx.SessionComplete();
       resetLocalSelection();
+      localUI.ShowDenied();
     }
   }
 }
@@ -215,9 +232,9 @@ bool reportProductDispensed(bool productDispensed)
     return false;
 
   uint16_t productCode = selectedProduct->code;
-  localUI.ShowVendResult(productDispensed);
   bool result = finishOnyxVend(productDispensed, productCode);
   resetLocalSelection();
+  localUI.ShowVendResult(productDispensed);
   return result;
 }
 #endif
