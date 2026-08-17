@@ -28,7 +28,7 @@ public:
                unsigned long homeFilterMs = 30);
 
     void Begin();
-    Result Start(uint8_t motorIndex);
+    Result Start(uint8_t motorIndex, unsigned long timeoutMs = 0);
     Result Update();
     void Stop();
 
@@ -62,6 +62,7 @@ private:
     bool m_outputActiveHigh;
     bool m_homeActiveLow;
     unsigned long m_cycleTimeoutMs;
+    unsigned long m_activeTimeoutMs;
     unsigned long m_homeFilterMs;
 
     uint8_t m_outputs[8];
