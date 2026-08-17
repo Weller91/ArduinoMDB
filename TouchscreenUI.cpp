@@ -46,19 +46,8 @@ TouchscreenUI::Event TouchscreenUI::Update()
 {
     int16_t x;
     int16_t y;
-    bool down = readTouch(x, y);
-
-    if (!down)
-    {
-        m_touchWasDown = false;
+    if (!GetTouchPress(x, y))
         return NONE;
-    }
-
-    if (m_touchWasDown || (millis() - m_lastTouchAt) < TOUCH_DEBOUNCE_MS)
-        return NONE;
-
-    m_touchWasDown = true;
-    m_lastTouchAt = millis();
 
     if (m_mode == CANCEL_SCREEN)
     {
@@ -294,6 +283,23 @@ char TouchscreenUI::keyAt(int16_t x, int16_t y) const
         {0, '0', 0}
     };
     return digits[row][column];
+}
+
+bool TouchscreenUI::GetTouchPress(int16_t &x, int16_t &y)
+{
+    bool down = readTouch(x, y);
+    if (!down)
+    {
+        m_touchWasDown = false;
+        return false;
+    }
+
+    if (m_touchWasDown || (millis() - m_lastTouchAt) < TOUCH_DEBOUNCE_MS)
+        return false;
+
+    m_touchWasDown = true;
+    m_lastTouchAt = millis();
+    return true;
 }
 
 bool TouchscreenUI::readTouch(int16_t &x, int16_t &y)
