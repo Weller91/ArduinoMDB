@@ -55,12 +55,18 @@ The Mega can run headless or use one of two comment-in options:
 - a 320x240 ILI9341 SPI display with XPT2046 touch, replacing both.
 
 Both provide product-code entry, catalogue prices, Nayax prompts and vend
-results. `VendMechanism` drives a configurable output only after payment
-approval and reports success only after a filtered product-drop beam break.
-A timeout reports vend failure and stops the output.
+results. Each catalogue entry maps to a motor channel. `MotorArray` supports
+up to 64 protected MOSFET channels through chained 74HC595 registers and reads
+one home switch per motor through chained 74HC165 registers.
 
-See [LOCAL_UI.md](LOCAL_UI.md) for selection flags, wiring, touchscreen
-libraries and calibration, output protection and sensor settings.
+Only one motor runs at a time. It must leave and return to its home switch, and
+the shared filtered drop beam must also confirm a falling product before
+`VendMechanism` reports success. Missing either condition stops the output and
+reports vend failure.
+
+See [LOCAL_UI.md](LOCAL_UI.md) for selection flags, UI wiring, touchscreen
+libraries, shift-register chains, MOSFET protection, home switches and drop
+sensor settings.
 
 ## Build
 
