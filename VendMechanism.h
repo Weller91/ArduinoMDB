@@ -23,7 +23,7 @@ public:
                   unsigned long dropGraceMs = 1200);
 
     void Begin();
-    Result Start(uint8_t motorIndex);
+    Result Start(uint8_t motorIndex, unsigned long motorTimeoutMs = 0);
     Result Update();
     void Stop();
 
