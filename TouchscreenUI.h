@@ -41,6 +41,9 @@ public:
     void ShowMessage(const char *line1, const char *line2 = "",
                      const char *line3 = "", const char *line4 = "");
 
+    Adafruit_ILI9341 &Display() { return m_display; }
+    bool GetTouchPress(int16_t &x, int16_t &y);
+
 private:
     enum ScreenMode
     {
