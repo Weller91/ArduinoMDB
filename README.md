@@ -47,11 +47,23 @@ See [NAYAX_ONYX.md](NAYAX_ONYX.md) before wiring or processing a live
 transaction. Level 3 features such as always-idle, remote vend, basket mode,
 negative vend and partial refunds are deliberately not enabled yet.
 
+## Optional local interface
+
+`LocalUI` adds an optional 20x4 I2C LCD and 4x4 matrix keypad to the Mega. It
+supports product-code entry, catalogue prices, cashless prompts, approval and
+vend-result messages. It is disabled by default with
+`ENABLE_LOCAL_UI 0`, so headless MDB operation remains available.
+
+The LCD and keypad drivers are included and require no external Arduino
+libraries. See [LOCAL_UI.md](LOCAL_UI.md) for wiring, controls, configuration
+and the delivery-confirmation requirement.
+
 ## Build
 
 Open `ArduinoMDB.ino` in Arduino IDE 2, select **Arduino Mega or Mega 2560**, and
 compile with the current Arduino AVR Boards package. No external library or Git
-submodule checkout is required; the UART and logger sources are included here.
+submodule checkout is required; the UART, logger, LCD and keypad sources are
+included here.
 
 ## Wiring files
 
