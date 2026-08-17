@@ -11,6 +11,7 @@
 #include "CashlessReader.h"
 #include "CoinChanger.h"
 #include "MDBSerial.h"
+#include "MotorArray.h"
 #include "VendMechanism.h"
 
 #if defined(UI_KEYPAD_LCD)
@@ -27,10 +28,17 @@ CashlessReader onyx(mdb); // Nayax Onyx as MDB Cashless Device #1 (0x10)
 // UART0 is used for diagnostics; UART1 is reserved for MDB by MDBSerial.
 UART uart(0);
 
-// Default output and drop-verification wiring.
-// Motor/relay output: pin 31, active HIGH.
-// Beam receiver output: pin 30, LOW while the falling product breaks the beam.
-VendMechanism dispenser(31, 30, true, true, 5000, 40);
+// Expandable motor bank.
+// 74HC595 outputs: data 32, clock 33, latch 34, OE 31.
+// 74HC165 home inputs: data 35, clock 36, parallel-load 37.
+// Each output drives a protected MOSFET driver input, not a motor directly.
+const uint8_t MOTOR_COUNT = 40;
+MotorArray motors(MOTOR_COUNT, 32, 33, 34, 31, 35, 36, 37,
+                  true, true, 8000, 30);
+
+// Shared drop beam: pin 30, LOW while the falling product breaks the beam.
+// The drop may occur before or shortly after the selected motor returns home.
+VendMechanism dispenser(motors, 30, true, 40, 1200);
 
 #if defined(UI_KEYPAD_LCD)
 const uint8_t KEYPAD_ROWS[4] = {22, 23, 24, 25};
@@ -50,14 +58,15 @@ struct Product
   uint16_t code;
   const char *name;
   uint32_t priceCents;
+  uint8_t motorIndex;
 };
 
 // Example catalogue. Replace these entries with the vending machine products.
 const Product PRODUCTS[] = {
-  {101, "BOOSTER PACK 1", 800},
-  {102, "BOOSTER PACK 2", 800},
-  {103, "PREMIUM BOOSTER", 1500},
-  {104, "ACCESSORY", 500}
+  {101, "BOOSTER PACK 1", 800, 0},
+  {102, "BOOSTER PACK 2", 800, 1},
+  {103, "PREMIUM BOOSTER", 1500, 2},
+  {104, "ACCESSORY", 500, 3}
 };
 const uint8_t PRODUCT_COUNT = sizeof(PRODUCTS) / sizeof(PRODUCTS[0]);
 
@@ -200,11 +209,22 @@ void updateLocalUI(CashlessReader::State cashlessState)
       localVendFlow = WAITING_FOR_DISPENSER;
       activeUI.ShowApproved();
 
-      VendMechanism::Result startResult = dispenser.Start();
+      VendMechanism::Result startResult =
+          dispenser.Start(selectedProduct->motorIndex);
       if (startResult == VendMechanism::SENSOR_BLOCKED)
       {
         reportProductDispensed(false);
         activeUI.ShowFault("DROP BEAM BLOCKED");
+      }
+      else if (startResult == VendMechanism::MOTOR_NOT_HOME)
+      {
+        reportProductDispensed(false);
+        activeUI.ShowFault("MOTOR NOT HOME");
+      }
+      else if (startResult == VendMechanism::MOTOR_FAULT)
+      {
+        reportProductDispensed(false);
+        activeUI.ShowFault("MOTOR ARRAY FAULT");
       }
       else
       {
@@ -224,7 +244,8 @@ void updateLocalUI(CashlessReader::State cashlessState)
     VendMechanism::Result result = dispenser.Update();
     if (result == VendMechanism::DROP_CONFIRMED)
       reportProductDispensed(true);
-    else if (result == VendMechanism::TIMED_OUT)
+    else if (result == VendMechanism::TIMED_OUT ||
+             result == VendMechanism::MOTOR_FAULT)
       reportProductDispensed(false);
   }
 }
