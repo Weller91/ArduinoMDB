@@ -36,7 +36,7 @@ private:
 	void hardReset();
 	
 private:
-	UART *m_uart;
+	UART m_uart;
 };
 
 
