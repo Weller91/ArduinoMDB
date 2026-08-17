@@ -86,37 +86,77 @@ inverting X/Y in `readTouch()`.
 The touchscreen displays an on-screen numeric keypad and replaces both the
 character LCD and physical keypad.
 
-## Product drop verification
+## Expandable motor array and drop verification
 
-Default wiring:
+The first configuration enables 40 motors and supports up to 64. It uses chained
+logic registers so the Mega pin count does not grow with every motor:
 
-| Function | Mega pin | Default state |
-|---|---|---|
-| Motor/relay output | 31 | HIGH while vending |
-| Drop beam receiver | 30 | INPUT_PULLUP; LOW when beam is broken |
+- 74HC595 serial-output registers feed protected MOSFET driver inputs;
+- 74HC165 parallel-input registers read one home switch per motor;
+- only one motor can be active at a time;
+- a hardware-wide 74HC595 output-enable line disables every channel when idle.
 
-The `VendMechanism` constructor controls output polarity, beam polarity, vend
-timeout and beam filter:
+### Register wiring
+
+| Function | Mega pin |
+|---|---|
+| 74HC595 serial data | 32 |
+| 74HC595 shift clock | 33 |
+| 74HC595 latch | 34 |
+| 74HC595 OE (active LOW) | 31 |
+| 74HC165 serial data | 35 |
+| 74HC165 clock | 36 |
+| 74HC165 parallel load | 37 |
+| Shared drop beam | 30 |
+
+Five 74HC595s and five 74HC165s provide 40 channels. Add another of each and
+increase `MOTOR_COUNT` for each additional eight motors, up to 64 in the
+current implementation.
+
+The 74HC595 output is only a logic signal for a MOSFET driver stage. It must not
+drive a motor. Each motor channel needs a correctly rated MOSFET, gate
+resistor/pulldown, flyback suppression, fuse/protection and suitable motor power
+supply. All outputs are disabled through OE during boot and while idle.
+
+The 74HC165 home inputs require defined logic levels. With the default
+`homeActiveLow = true`, use suitable pull-ups and switches/sensors that pull
+their input LOW at home.
+
+### Motor cycle
+
+A selected motor must begin with its home switch active. The controller then:
+
+1. enables only the selected MOSFET channel;
+2. waits for that motor to leave its home switch;
+3. waits for it to return home;
+4. stops and disables every output;
+5. requires the shared drop beam to have confirmed a falling product.
+
+A motor that does not leave and return home within 8000 ms is stopped and
+reported as a failure. A motor whose switch is not home before starting is not
+energised.
+
+### Shared drop beam
+
+The beam input is pin 30 with `INPUT_PULLUP`; the default considers LOW to be
+a broken beam. The interruption must persist for 40 ms to reject noise.
+
+A product may cross the beam before or just after the spiral returns home. The
+controller records either order, then requires both events. After the motor
+returns home it allows 1200 ms for the product to reach the beam. Missing either
+the home cycle or the confirmed drop reports MDB `VEND FAILURE`.
+
+### Product mapping
+
+Each catalogue row includes its motor channel:
 
 ```cpp
-VendMechanism dispenser(31, 30, true, true, 5000, 40);
+{101, "BOOSTER PACK 1", 800, 0},
+{102, "BOOSTER PACK 2", 800, 1}
 ```
 
-This means:
-
-- motor output active HIGH;
-- beam break active LOW;
-- maximum motor run time 5000 ms;
-- beam must remain broken for 40 ms before it counts as a product drop.
-
-Change these values to match the relay and beam receiver. Use an appropriate
-driver, flyback protection and separate motor supply; never drive a vending
-motor or relay coil directly from a Mega GPIO.
-
-The code refuses to start a vend if the beam is already blocked. After Nayax
-approves the transaction, the Arduino energises the output and arms the beam.
-A filtered beam break reports MDB `VEND SUCCESS`. If no break occurs before
-the timeout, it stops the output and reports `VEND FAILURE`.
+The fields are product code, display name, price in cents and zero-based motor
+index.
 
 ## Vend flow
 
