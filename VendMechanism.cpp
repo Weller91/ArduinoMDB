@@ -26,7 +26,7 @@ void VendMechanism::Begin()
     m_result = IDLE;
 }
 
-VendMechanism::Result VendMechanism::Start(uint8_t motorIndex)
+VendMechanism::Result VendMechanism::Start(uint8_t motorIndex, unsigned long motorTimeoutMs)
 {
     if (IsBeamBroken())
     {
@@ -34,7 +34,7 @@ VendMechanism::Result VendMechanism::Start(uint8_t motorIndex)
         return m_result;
     }
 
-    MotorArray::Result motorResult = m_motors.Start(motorIndex);
+    MotorArray::Result motorResult = m_motors.Start(motorIndex, motorTimeoutMs);
     if (motorResult == MotorArray::MOTOR_NOT_HOME)
     {
         m_result = MOTOR_NOT_HOME;
