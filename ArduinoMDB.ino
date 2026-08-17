@@ -1,15 +1,22 @@
-// Set to 1 to enable the optional 20x4 I2C LCD and 4x4 keypad.
-#ifndef ENABLE_LOCAL_UI
-#define ENABLE_LOCAL_UI 0
+// Choose one local interface by uncommenting it. Leave both commented for
+// headless MDB operation.
+// #define UI_KEYPAD_LCD
+// #define UI_SPI_TOUCHSCREEN
+
+#if defined(UI_KEYPAD_LCD) && defined(UI_SPI_TOUCHSCREEN)
+#error "Select only one local user interface"
 #endif
 
 #include "BillValidator.h"
 #include "CashlessReader.h"
 #include "CoinChanger.h"
 #include "MDBSerial.h"
+#include "VendMechanism.h"
 
-#if ENABLE_LOCAL_UI
+#if defined(UI_KEYPAD_LCD)
 #include "LocalUI.h"
+#elif defined(UI_SPI_TOUCHSCREEN)
+#include "TouchscreenUI.h"
 #endif
 
 MDBSerial mdb(1);
@@ -20,11 +27,24 @@ CashlessReader onyx(mdb); // Nayax Onyx as MDB Cashless Device #1 (0x10)
 // UART0 is used for diagnostics; UART1 is reserved for MDB by MDBSerial.
 UART uart(0);
 
-#if ENABLE_LOCAL_UI
+// Default output and drop-verification wiring.
+// Motor/relay output: pin 31, active HIGH.
+// Beam receiver output: pin 30, LOW while the falling product breaks the beam.
+VendMechanism dispenser(31, 30, true, true, 5000, 40);
+
+#if defined(UI_KEYPAD_LCD)
 const uint8_t KEYPAD_ROWS[4] = {22, 23, 24, 25};
 const uint8_t KEYPAD_COLUMNS[4] = {26, 27, 28, 29};
-LocalUI localUI(KEYPAD_ROWS, KEYPAD_COLUMNS, 0x27);
+LocalUI activeUI(KEYPAD_ROWS, KEYPAD_COLUMNS, 0x27);
+typedef LocalUI ActiveUI;
+#elif defined(UI_SPI_TOUCHSCREEN)
+// Mega hardware SPI: MISO 50, MOSI 51, SCK 52 and hardware SS 53.
+// Display CS 10, DC 9, reset 8; touch CS 6 and IRQ 2.
+TouchscreenUI activeUI(10, 9, 8, 6, 2);
+typedef TouchscreenUI ActiveUI;
+#endif
 
+#if defined(UI_KEYPAD_LCD) || defined(UI_SPI_TOUCHSCREEN)
 struct Product
 {
   uint16_t code;
@@ -91,48 +111,53 @@ void resetLocalSelection()
 {
   selectedProduct = 0;
   localVendFlow = SELECTING_PRODUCT;
-  localUI.ClearSelection();
+  activeUI.ClearSelection();
 }
+
+bool reportProductDispensed(bool productDispensed);
 
 void updateLocalUI(CashlessReader::State cashlessState)
 {
-  LocalUI::Event event = localUI.Update();
+  ActiveUI::Event event = activeUI.Update();
 
-  if (event == LocalUI::SELECTION_CHANGED)
+  if (event == ActiveUI::SELECTION_CHANGED)
   {
-    const Product *product = findProduct(localUI.GetSelection());
+    const Product *product = findProduct(activeUI.GetSelection());
     if (product)
-      localUI.ShowSelection(product->code, product->name, product->priceCents);
+      activeUI.ShowSelection(product->code, product->name, product->priceCents);
   }
-  else if (event == LocalUI::CONFIRM &&
+  else if (event == ActiveUI::CONFIRM &&
            localVendFlow == SELECTING_PRODUCT)
   {
-    selectedProduct = findProduct(localUI.GetSelection());
+    selectedProduct = findProduct(activeUI.GetSelection());
     if (selectedProduct)
     {
       localVendFlow = WAITING_FOR_SESSION;
-      localUI.ShowTapCard();
+      activeUI.ShowTapCard();
     }
     else
     {
-      localUI.ShowMessage("INVALID PRODUCT", "CHECK CODE", "C TO CLEAR", "");
+      activeUI.ShowMessage("INVALID PRODUCT", "CHECK CODE", "CLEAR AND RETRY", "");
     }
   }
-  else if (event == LocalUI::CANCEL)
+  else if (event == ActiveUI::CANCEL &&
+           localVendFlow != WAITING_FOR_DISPENSER)
   {
     if (cashlessState == CashlessReader::SESSION_IDLE)
       onyx.SessionComplete();
     else if (cashlessState == CashlessReader::VEND_PENDING)
       onyx.CancelVend();
     resetLocalSelection();
-    localUI.ShowWelcome();
+    activeUI.ShowWelcome();
   }
-  else if (event == LocalUI::STATUS)
+  else if (event == ActiveUI::STATUS)
   {
     char stateLine[21];
     snprintf(stateLine, sizeof(stateLine), "CASHLESS STATE %u",
              (unsigned int)cashlessState);
-    localUI.ShowMessage("MACHINE STATUS", stateLine, "MDB ONLINE", "");
+    activeUI.ShowMessage("MACHINE STATUS", stateLine,
+                         dispenser.IsBeamBroken() ? "BEAM BLOCKED" : "BEAM CLEAR",
+                         "BACK");
   }
 
   if (localVendFlow == WAITING_FOR_SESSION &&
@@ -142,27 +167,29 @@ void updateLocalUI(CashlessReader::State cashlessState)
     if (!centsToMdbUnits(selectedProduct->priceCents, mdbPrice))
     {
       resetLocalSelection();
-      localUI.ShowFault("PRICE SCALE ERROR");
+      activeUI.ShowFault("PRICE SCALE ERROR");
     }
     else if (onyx.RequestVend(mdbPrice, selectedProduct->code))
     {
       localVendFlow = WAITING_FOR_APPROVAL;
-      localUI.ShowAuthorising();
+      activeUI.ShowAuthorising();
     }
   }
 
   if (cashlessState == CashlessReader::CANCEL_REQUESTED)
   {
     onyx.SessionComplete();
+    dispenser.Stop();
     resetLocalSelection();
-    localUI.ShowMessage("PAYMENT CANCELLED", "SELECT AGAIN", "", "");
+    activeUI.ShowMessage("PAYMENT CANCELLED", "SELECT AGAIN", "", "BACK");
     return;
   }
 
   if (cashlessState == CashlessReader::FAULT)
   {
+    dispenser.Stop();
     resetLocalSelection();
-    localUI.ShowFault("NAYAX MDB FAULT");
+    activeUI.ShowFault("NAYAX MDB FAULT");
     return;
   }
 
@@ -171,17 +198,34 @@ void updateLocalUI(CashlessReader::State cashlessState)
     if (cashlessState == CashlessReader::VEND_APPROVED)
     {
       localVendFlow = WAITING_FOR_DISPENSER;
-      localUI.ShowApproved();
+      activeUI.ShowApproved();
 
-      // Trigger the physical product mechanism here. When its delivery sensor
-      // confirms the result, call reportProductDispensed(true) or (false).
+      VendMechanism::Result startResult = dispenser.Start();
+      if (startResult == VendMechanism::SENSOR_BLOCKED)
+      {
+        reportProductDispensed(false);
+        activeUI.ShowFault("DROP BEAM BLOCKED");
+      }
+      else
+      {
+        activeUI.ShowDispensing();
+      }
     }
     else if (cashlessState == CashlessReader::VEND_DENIED)
     {
       onyx.SessionComplete();
       resetLocalSelection();
-      localUI.ShowDenied();
+      activeUI.ShowDenied();
     }
+  }
+
+  if (localVendFlow == WAITING_FOR_DISPENSER)
+  {
+    VendMechanism::Result result = dispenser.Update();
+    if (result == VendMechanism::DROP_CONFIRMED)
+      reportProductDispensed(true);
+    else if (result == VendMechanism::TIMED_OUT)
+      reportProductDispensed(false);
   }
 }
 #endif
@@ -193,12 +237,13 @@ void setup()
   uart.begin();
   Logger::SetUART(&uart);
 
+  dispenser.Begin();
   changer.Reset();
   validator.Reset();
   onyx.Reset();
 
-#if ENABLE_LOCAL_UI
-  localUI.Begin();
+#if defined(UI_KEYPAD_LCD) || defined(UI_SPI_TOUCHSCREEN)
+  activeUI.Begin();
 #endif
 
   uart.println("###############");
@@ -225,16 +270,17 @@ bool finishOnyxVend(bool productDispensed, uint16_t itemNumber)
   return onyx.SessionComplete();
 }
 
-#if ENABLE_LOCAL_UI
+#if defined(UI_KEYPAD_LCD) || defined(UI_SPI_TOUCHSCREEN)
 bool reportProductDispensed(bool productDispensed)
 {
   if (localVendFlow != WAITING_FOR_DISPENSER || !selectedProduct)
     return false;
 
   uint16_t productCode = selectedProduct->code;
+  dispenser.Stop();
   bool result = finishOnyxVend(productDispensed, productCode);
   resetLocalSelection();
-  localUI.ShowVendResult(productDispensed);
+  activeUI.ShowVendResult(productDispensed);
   return result;
 }
 #endif
@@ -247,7 +293,7 @@ void loop()
 
   CashlessReader::State cashlessState = onyx.Update();
 
-#if ENABLE_LOCAL_UI
+#if defined(UI_KEYPAD_LCD) || defined(UI_SPI_TOUCHSCREEN)
   updateLocalUI(cashlessState);
 #else
   // Close sessions cancelled by the card reader or denied at authorization.
