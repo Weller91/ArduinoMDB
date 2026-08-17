@@ -187,8 +187,15 @@ bool MotorArray::readHomeBit(uint8_t motorIndex)
     digitalWrite(m_homeLoadPin, HIGH);
     delayMicroseconds(2);
 
+    // A 74HC165 presents H/D7 first after parallel load. Reverse the bit
+    // position inside each register so software channel 0 maps to A/D0,
+    // channel 1 to B/D1, and so on.
+    uint8_t registerIndex = motorIndex / 8;
+    uint8_t channelInRegister = motorIndex % 8;
+    uint8_t shiftPosition = (registerIndex * 8) + (7 - channelInRegister);
+
     bool raw = false;
-    for (uint8_t channel = 0; channel <= motorIndex; ++channel)
+    for (uint8_t position = 0; position <= shiftPosition; ++position)
     {
         raw = digitalRead(m_homeDataPin) == HIGH;
         digitalWrite(m_homeClockPin, HIGH);
