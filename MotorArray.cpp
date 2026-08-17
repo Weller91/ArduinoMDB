@@ -22,6 +22,7 @@ MotorArray::MotorArray(uint8_t motorCount,
       m_outputActiveHigh(outputActiveHigh),
       m_homeActiveLow(homeActiveLow),
       m_cycleTimeoutMs(cycleTimeoutMs),
+      m_activeTimeoutMs(cycleTimeoutMs),
       m_homeFilterMs(homeFilterMs),
       m_activeMotor(0xFF),
       m_startedAt(0),
@@ -54,7 +55,7 @@ void MotorArray::Begin()
     setOutputEnable(false);
 }
 
-MotorArray::Result MotorArray::Start(uint8_t motorIndex)
+MotorArray::Result MotorArray::Start(uint8_t motorIndex, unsigned long timeoutMs)
 {
     if (motorIndex >= m_motorCount)
     {
@@ -69,6 +70,7 @@ MotorArray::Result MotorArray::Start(uint8_t motorIndex)
     }
 
     m_activeMotor = motorIndex;
+    m_activeTimeoutMs = timeoutMs >= 250 ? timeoutMs : m_cycleTimeoutMs;
     m_startedAt = millis();
     m_homeChangedAt = m_startedAt;
     m_lastHomeRaw = true;
@@ -108,7 +110,7 @@ MotorArray::Result MotorArray::Update()
         }
     }
 
-    if ((now - m_startedAt) >= m_cycleTimeoutMs)
+    if ((now - m_startedAt) >= m_activeTimeoutMs)
     {
         Stop();
         m_result = TIMED_OUT;
