@@ -75,15 +75,21 @@ compile with the current Arduino AVR Boards package. The headless and LCD/keypad
 The SPI touchscreen option uses the three Arduino libraries listed in
 `LOCAL_UI.md`.
 
-## Wiring files
+## Wiring
+
+See [WIRING.md](WIRING.md) for the complete Mega pin allocation, both interface
+options, 74HC595 motor-output chain, MOSFET stages, 74HC165 home-switch chain,
+drop beam, power rules and product-to-motor mapping.
+
+Historical reference files:
 
 - `wiring/interface.fzz` — editable legacy Fritzing project
-- `wiring.jpg` — breadboard view
-- `MDB_scematic.jpg` — schematic view
+- `wiring.jpg` — legacy breadboard view
+- `MDB_scematic.jpg` — legacy MDB schematic view
 
-Treat these as historical reference material. Confirm the MDB electrical layer
-against the applicable MDB/ICP specification and the actual peripheral before
-building hardware.
+The historical diagrams cover only the original MDB interface and are not the
+complete vending-machine wiring. Confirm the MDB electrical layer against the
+applicable MDB/ICP specification and actual peripheral before building.
 
 ## Upstream
 
