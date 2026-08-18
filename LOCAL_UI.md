@@ -170,3 +170,37 @@ index.
 
 Edit the example `PRODUCTS[]` catalogue in `ArduinoMDB.ino`; its entries are
 placeholders rather than production prices.
+
+
+## Touchscreen product maintenance
+
+With the SPI touchscreen option enabled, a maintained physical key switch
+between Mega pin 38 and GND opens the product editor. Pin 38 uses
+`INPUT_PULLUP`, so the switch is active LOW.
+
+The editor provides 64 EEPROM-backed product slots. Each slot can edit:
+
+- product code;
+- 16-character display name using an on-screen keyboard;
+- price in cents;
+- zero-based motor channel;
+- stock quantity;
+- individual motor-cycle timeout in milliseconds;
+- enabled/disabled state.
+
+The Save button writes the record to internal EEPROM with a record checksum.
+The EEPROM format has a versioned header. On first use or invalid format, it
+creates four example products; those examples should be replaced before live
+operation.
+
+Test Vend runs the selected motor without requesting payment and without
+reducing stock. It still requires the motor to start at home, leave and return
+home, and the product to cross the shared drop beam.
+
+Cashless vending is disabled while the key switch is in maintenance position.
+The key cannot interrupt a paid vend already underway. Removing the key returns
+to the customer screen and re-enables the Nayax reader.
+
+A successful paid and beam-confirmed vend automatically subtracts one from the
+stored stock. Products that are disabled, have zero stock, use an invalid motor
+channel or have an invalid code are unavailable to customers.
