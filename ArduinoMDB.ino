@@ -12,12 +12,14 @@
 #include "CoinChanger.h"
 #include "MDBSerial.h"
 #include "MotorArray.h"
+#include "ProductCatalog.h"
 #include "VendMechanism.h"
 
 #if defined(UI_KEYPAD_LCD)
 #include "LocalUI.h"
 #elif defined(UI_SPI_TOUCHSCREEN)
 #include "TouchscreenUI.h"
+#include "ProductEditor.h"
 #endif
 
 MDBSerial mdb(1);
@@ -39,6 +41,7 @@ MotorArray motors(MOTOR_COUNT, 32, 33, 34, 31, 35, 36, 37,
 // Shared drop beam: pin 30, LOW while the falling product breaks the beam.
 // The drop may occur before or shortly after the selected motor returns home.
 VendMechanism dispenser(motors, 30, true, 40, 1200);
+ProductCatalog catalog;
 
 #if defined(UI_KEYPAD_LCD)
 const uint8_t KEYPAD_ROWS[4] = {22, 23, 24, 25};
@@ -49,27 +52,14 @@ typedef LocalUI ActiveUI;
 // Mega hardware SPI: MISO 50, MOSI 51, SCK 52 and hardware SS 53.
 // Display CS 10, DC 9, reset 8; touch CS 6 and IRQ 2.
 TouchscreenUI activeUI(10, 9, 8, 6, 2);
+ProductEditor productEditor(activeUI);
+const uint8_t ADMIN_KEY_PIN = 38; // physical key switch to GND
+bool adminTestRunning = false;
+unsigned long adminResultUntil = 0;
 typedef TouchscreenUI ActiveUI;
 #endif
 
 #if defined(UI_KEYPAD_LCD) || defined(UI_SPI_TOUCHSCREEN)
-struct Product
-{
-  uint16_t code;
-  const char *name;
-  uint32_t priceCents;
-  uint8_t motorIndex;
-};
-
-// Example catalogue. Replace these entries with the vending machine products.
-const Product PRODUCTS[] = {
-  {101, "BOOSTER PACK 1", 800, 0},
-  {102, "BOOSTER PACK 2", 800, 1},
-  {103, "PREMIUM BOOSTER", 1500, 2},
-  {104, "ACCESSORY", 500, 3}
-};
-const uint8_t PRODUCT_COUNT = sizeof(PRODUCTS) / sizeof(PRODUCTS[0]);
-
 enum LocalVendFlow
 {
   SELECTING_PRODUCT,
@@ -79,14 +69,16 @@ enum LocalVendFlow
 };
 
 LocalVendFlow localVendFlow = SELECTING_PRODUCT;
-const Product *selectedProduct = 0;
+ProductRecord selectedProduct;
+uint8_t selectedProductSlot = ProductCatalog::INVALID_SLOT;
+bool selectedProductValid = false;
 
-const Product *findProduct(uint16_t code)
+bool availableProduct(uint16_t code, ProductRecord &product,
+                      uint8_t *slot = 0)
 {
-  for (uint8_t i = 0; i < PRODUCT_COUNT; ++i)
-    if (PRODUCTS[i].code == code)
-      return &PRODUCTS[i];
-  return 0;
+  return catalog.FindByCode(code, product, slot) &&
+         product.IsEnabled() && product.stock > 0 &&
+         product.motorIndex < MOTOR_COUNT;
 }
 
 bool centsToMdbUnits(uint32_t cents, uint16_t &units)
@@ -118,7 +110,8 @@ bool centsToMdbUnits(uint32_t cents, uint16_t &units)
 
 void resetLocalSelection()
 {
-  selectedProduct = 0;
+  selectedProductValid = false;
+  selectedProductSlot = ProductCatalog::INVALID_SLOT;
   localVendFlow = SELECTING_PRODUCT;
   activeUI.ClearSelection();
 }
@@ -131,22 +124,24 @@ void updateLocalUI(CashlessReader::State cashlessState)
 
   if (event == ActiveUI::SELECTION_CHANGED)
   {
-    const Product *product = findProduct(activeUI.GetSelection());
-    if (product)
-      activeUI.ShowSelection(product->code, product->name, product->priceCents);
+    ProductRecord product;
+    if (availableProduct(activeUI.GetSelection(), product))
+      activeUI.ShowSelection(product.code, product.name, product.priceCents);
   }
   else if (event == ActiveUI::CONFIRM &&
            localVendFlow == SELECTING_PRODUCT)
   {
-    selectedProduct = findProduct(activeUI.GetSelection());
-    if (selectedProduct)
+    if (availableProduct(activeUI.GetSelection(), selectedProduct,
+                         &selectedProductSlot))
     {
+      selectedProductValid = true;
       localVendFlow = WAITING_FOR_SESSION;
       activeUI.ShowTapCard();
     }
     else
     {
-      activeUI.ShowMessage("INVALID PRODUCT", "CHECK CODE", "CLEAR AND RETRY", "");
+      activeUI.ShowMessage("UNAVAILABLE", "CODE/STOCK DISABLED",
+                           "CLEAR AND RETRY", "");
     }
   }
   else if (event == ActiveUI::CANCEL &&
@@ -173,12 +168,12 @@ void updateLocalUI(CashlessReader::State cashlessState)
       cashlessState == CashlessReader::SESSION_IDLE)
   {
     uint16_t mdbPrice;
-    if (!centsToMdbUnits(selectedProduct->priceCents, mdbPrice))
+    if (!centsToMdbUnits(selectedProduct.priceCents, mdbPrice))
     {
       resetLocalSelection();
       activeUI.ShowFault("PRICE SCALE ERROR");
     }
-    else if (onyx.RequestVend(mdbPrice, selectedProduct->code))
+    else if (onyx.RequestVend(mdbPrice, selectedProduct.code))
     {
       localVendFlow = WAITING_FOR_APPROVAL;
       activeUI.ShowAuthorising();
@@ -210,7 +205,8 @@ void updateLocalUI(CashlessReader::State cashlessState)
       activeUI.ShowApproved();
 
       VendMechanism::Result startResult =
-          dispenser.Start(selectedProduct->motorIndex);
+          dispenser.Start(selectedProduct.motorIndex,
+                          selectedProduct.motorTimeoutMs);
       if (startResult == VendMechanism::SENSOR_BLOCKED)
       {
         reportProductDispensed(false);
@@ -251,6 +247,99 @@ void updateLocalUI(CashlessReader::State cashlessState)
 }
 #endif
 
+#if defined(UI_SPI_TOUCHSCREEN)
+bool updateTouchscreenAdmin(CashlessReader::State cashlessState)
+{
+  bool keyActive = digitalRead(ADMIN_KEY_PIN) == LOW;
+
+  if (!productEditor.IsActive())
+  {
+    if (keyActive && localVendFlow == SELECTING_PRODUCT &&
+        cashlessState != CashlessReader::SESSION_IDLE &&
+        cashlessState != CashlessReader::VEND_PENDING &&
+        !adminTestRunning)
+    {
+      onyx.Disable();
+      productEditor.Enter(catalog);
+      return true;
+    }
+    return false;
+  }
+
+  if (!keyActive && !adminTestRunning)
+  {
+    productEditor.Exit();
+    onyx.Enable();
+    activeUI.ShowWelcome();
+    return false;
+  }
+
+  if (adminTestRunning)
+  {
+    VendMechanism::Result result = dispenser.Update();
+    if (result == VendMechanism::DROP_CONFIRMED)
+    {
+      dispenser.Stop();
+      adminTestRunning = false;
+      adminResultUntil = millis() + 1500;
+      activeUI.ShowMessage("TEST VEND PASSED", "HOME + DROP OK", "", "");
+    }
+    else if (result == VendMechanism::TIMED_OUT ||
+             result == VendMechanism::MOTOR_FAULT)
+    {
+      dispenser.Stop();
+      adminTestRunning = false;
+      adminResultUntil = millis() + 1500;
+      activeUI.ShowMessage("TEST VEND FAILED", "CHECK MOTOR/BEAM", "", "");
+    }
+    return true;
+  }
+
+  if (adminResultUntil)
+  {
+    if ((long)(millis() - adminResultUntil) >= 0)
+    {
+      adminResultUntil = 0;
+      productEditor.Enter(catalog);
+    }
+    return true;
+  }
+
+  ProductRecord testProduct;
+  uint8_t testSlot;
+  ProductEditor::Event event =
+      productEditor.Update(catalog, testProduct, testSlot);
+
+  if (event == ProductEditor::TEST_REQUESTED)
+  {
+    VendMechanism::Result result =
+        dispenser.Start(testProduct.motorIndex, testProduct.motorTimeoutMs);
+    if (result == VendMechanism::RUNNING)
+    {
+      adminTestRunning = true;
+      activeUI.ShowDispensing();
+    }
+    else
+    {
+      adminResultUntil = millis() + 1500;
+      activeUI.ShowMessage("TEST NOT STARTED",
+                           result == VendMechanism::MOTOR_NOT_HOME
+                               ? "MOTOR NOT HOME" : "BEAM/MOTOR FAULT",
+                           "", "");
+    }
+  }
+  else if (event == ProductEditor::EXIT_REQUESTED)
+  {
+    productEditor.Exit();
+    onyx.Enable();
+    activeUI.ShowWelcome();
+    return false;
+  }
+
+  return true;
+}
+#endif
+
 void setup()
 {
   mdb.begin();
@@ -259,6 +348,10 @@ void setup()
   Logger::SetUART(&uart);
 
   dispenser.Begin();
+  catalog.Begin();
+#if defined(UI_SPI_TOUCHSCREEN)
+  pinMode(ADMIN_KEY_PIN, INPUT_PULLUP);
+#endif
   changer.Reset();
   validator.Reset();
   onyx.Reset();
@@ -294,12 +387,15 @@ bool finishOnyxVend(bool productDispensed, uint16_t itemNumber)
 #if defined(UI_KEYPAD_LCD) || defined(UI_SPI_TOUCHSCREEN)
 bool reportProductDispensed(bool productDispensed)
 {
-  if (localVendFlow != WAITING_FOR_DISPENSER || !selectedProduct)
+  if (localVendFlow != WAITING_FOR_DISPENSER || !selectedProductValid)
     return false;
 
-  uint16_t productCode = selectedProduct->code;
+  uint16_t productCode = selectedProduct.code;
+  uint8_t productSlot = selectedProductSlot;
   dispenser.Stop();
   bool result = finishOnyxVend(productDispensed, productCode);
+  if (productDispensed && result && productSlot != ProductCatalog::INVALID_SLOT)
+    catalog.DecrementStock(productSlot);
   resetLocalSelection();
   activeUI.ShowVendResult(productDispensed);
   return result;
@@ -313,6 +409,14 @@ void loop()
   validator.Update(change);
 
   CashlessReader::State cashlessState = onyx.Update();
+
+#if defined(UI_SPI_TOUCHSCREEN)
+  if (updateTouchscreenAdmin(cashlessState))
+  {
+    delay(50);
+    return;
+  }
+#endif
 
 #if defined(UI_KEYPAD_LCD) || defined(UI_SPI_TOUCHSCREEN)
   updateLocalUI(cashlessState);
