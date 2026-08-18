@@ -31,6 +31,7 @@ It assumes:
 | 35 | 74HC165 serial home-switch data |
 | 36 | 74HC165 clock |
 | 37 | 74HC165 parallel load, active LOW |
+| 38 | Physical maintenance key switch, active LOW |
 | 50/51/52 | SPI MISO/MOSI/SCK for optional touchscreen |
 | 53 | Mega hardware SS; keep as OUTPUT when using SPI |
 | 10/9/8 | TFT CS/DC/reset |
@@ -144,6 +145,34 @@ Select this interface:
 Do not assume the TFT accepts 5 V logic. A bare 3.3 V module needs proper level
 translation on SCK, MOSI, CS, DC and reset. Use a module with documented
 Mega-compatible regulation/level shifting or add it externally.
+
+## Physical maintenance key switch
+
+The touchscreen product editor is enabled by a maintained key switch:
+
+| Switch terminal | Connection |
+|---|---|
+| Common | Mega GND |
+| Normally open | Mega pin 38 |
+
+Pin 38 uses `INPUT_PULLUP`. Turning the key closes the switch and pulls the pin
+LOW. Use a maintained key switch so removing the key returns the machine to
+normal vending mode.
+
+The firmware only enters maintenance mode when no paid vend or active cashless
+session is underway. It disables the Nayax reader while editing. Removing the
+key exits maintenance and re-enables cashless vending.
+
+Do not route motor voltage through this switch; it is a 5 V logic input only.
+
+## EEPROM product catalogue
+
+The Mega's internal EEPROM stores up to 64 product records. No additional wiring
+is required. Each record contains the product code, 16-character name, price,
+motor channel, stock, motor timeout and enabled state.
+
+A successful paid vend reduces stock by one. A maintenance test vend does not
+change stock and does not request or charge payment.
 
 ## Expandable motor output chain
 
