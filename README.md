@@ -64,6 +64,11 @@ the shared filtered drop beam must also confirm a falling product before
 `VendMechanism` reports success. Missing either condition stops the output and
 reports vend failure.
 
+With the touchscreen selected, a physical key switch opens a 64-slot,
+EEPROM-backed product editor. Code, name, price, motor channel, stock, individual
+motor timeout and enabled state are editable on screen. It also provides a
+no-charge test vend. Successful paid vends automatically reduce stock.
+
 See [LOCAL_UI.md](LOCAL_UI.md) for selection flags, UI wiring, touchscreen
 libraries, shift-register chains, MOSFET protection, home switches and drop
 sensor settings.
